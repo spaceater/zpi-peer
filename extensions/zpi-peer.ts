@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import { getAgentDir, SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -164,6 +165,29 @@ async function waitForBoot(
 }
 
 const registryDir = () => path.join(getAgentDir(), "peer", "registry");
+
+const peerRolesDir = () => path.join(getAgentDir(), "peer", "roles");
+const BUNDLED_ROLES = ["AGENTS.scout.md", "AGENTS.researcher.md", "AGENTS.critic.md"];
+const bundledRolesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "roles");
+
+/** Mirror the bundled role files into the peer data directory. An edited or older copy is kept as
+ * `<name>.backup` before the bundled version is written, so every start reconciles the roles. */
+function syncRoles(): void {
+	try {
+		const dir = peerRolesDir();
+		fs.mkdirSync(dir, { recursive: true });
+		for (const name of BUNDLED_ROLES) {
+			const src = path.join(bundledRolesDir, name);
+			const dst = path.join(dir, name);
+			const bundled = fs.readFileSync(src);
+			if (fs.existsSync(dst)) {
+				if (fs.readFileSync(dst).equals(bundled)) continue;
+				fs.renameSync(dst, `${dst}.backup`);
+			}
+			fs.copyFileSync(src, dst);
+		}
+	} catch {}
+}
 
 /** Expand a leading ~/ — fs.* and pi's prompt resolution do not. */
 function expandPath(p: string): string {
@@ -392,6 +416,10 @@ async function revivePeer(pi: ExtensionAPI, sid: string, cwd: string, signal?: A
 }
 
 export default function piPeer(pi: ExtensionAPI) {
+	syncRoles();
+	const roleDir = peerRolesDir();
+	const ROLE_HINT = `Standard roles live in ${roleDir}: AGENTS.scout.md (fast reconnaissance), AGENTS.researcher.md (directed research), AGENTS.critic.md (independent review).`;
+
 	// On a revive the role must be resolved before any pending letter can start a turn —
 	// session_start does both, in that order.
 
@@ -451,7 +479,7 @@ export default function piPeer(pi: ExtensionAPI) {
 		name: "peer_spawn",
 		label: "Spawn peer",
 		description:
-			`Spawn an equal pi peer in a tmux pane with a pre-assigned sessionId. ${SKILL_GATE} It returns only once the peer is verifiably up — it blocks up to ~${SPAWN_BOOT_TIMEOUT_MS / 1000}s until the peer labels the pane it was given, and reports a failure instead of handing back a sid that never booted. The returned sid becomes disk-durable a few seconds after return, when the peer submits its first message (pi persists the session file then, not at boot); a peer killed before that leaves no session — its sid goes dark (mail queues, resume reports not found). The task is delivered at launch as the peer's first user message. Use peer_send_mail for follow-up letters. prompt: path to a role file that stays with the peer across every start — standard roles: critic, researcher, scout — the role files ship inside the peer-orchestrator skill under roles/ (the skill, resolvable from its directory, lists them; any other file path works for a custom role). context: omit = empty | fork:<sessionId> = fork that session's full history, and the forked peer also inherits its role unless prompt overrides it | handoff:<text> = custom context text (prepended to the first message).`,
+			`Spawn an equal pi peer in a tmux pane with a pre-assigned sessionId. ${SKILL_GATE} It returns only once the peer is verifiably up — it blocks up to ~${SPAWN_BOOT_TIMEOUT_MS / 1000}s until the peer labels the pane it was given, and reports a failure instead of handing back a sid that never booted. The returned sid becomes disk-durable a few seconds after return, when the peer submits its first message (pi persists the session file then, not at boot); a peer killed before that leaves no session — its sid goes dark (mail queues, resume reports not found). The task is delivered at launch as the peer's first user message. Use peer_send_mail for follow-up letters. prompt: path to a role file that stays with the peer across every start — ${ROLE_HINT} The peer-orchestrator skill describes what each role does; any other file path works for a custom role. context: omit = empty | fork:<sessionId> = fork that session's full history, and the forked peer also inherits its role unless prompt overrides it | handoff:<text> = custom context text (prepended to the first message).`,
 		promptGuidelines: [
 			"Use peer_spawn only when the user asked for parallel/independent work or a task clearly warrants a separate context; every letter sent via peer_send_mail costs the recipient one LLM turn.",
 		],
@@ -461,7 +489,7 @@ export default function piPeer(pi: ExtensionAPI) {
 			prompt: Type.Optional(
 				Type.String({
 					description:
-						"Path to a role-prompt file (errors if it does not exist). The role stays with the peer across every start — spawn, mail revive, or a user-run /resume — and the file is re-read per turn, so editing it takes effect without respawning. Identity follows the session: /new inside a peer's pane starts a plain session, while a fork inherits the role of the session it branched from unless this overrides it. Standard roles: critic / researcher / scout (files bundled in the peer-orchestrator skill's roles/ directory; any other file path works for a custom role); omit for a plain peer.",
+						"Path to a role-prompt file (errors if it does not exist). The role stays with the peer across every start — spawn, mail revive, or a user-run /resume — and the file is re-read per turn, so editing it takes effect without respawning. Identity follows the session: /new inside a peer's pane starts a plain session, while a fork inherits the role of the session it branched from unless this overrides it. ${ROLE_HINT} Any other file path works for a custom role; omit for a plain peer.",
 				}),
 			),
 			context: Type.Optional(

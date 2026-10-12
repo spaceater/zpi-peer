@@ -71,16 +71,16 @@ peer when a new one is needed.
 All three are read-only by intent. Peers launch with the full toolset; discipline comes from the
 role file and your task text, not from restrictions. A peer can always mail you back.
 
-The three role files ship inside this skill, under `roles/` — pass their paths (resolved from
-this skill's directory) to `peer_spawn`'s prompt parameter. For a custom role, pass the path of
-any other role file instead.
+Pass the path of the role file you want to `peer_spawn`'s prompt parameter; the exact paths of
+the three standard roles are given in the peer_spawn tool description. For a custom role, pass
+the path of any other role file instead.
 
-- `roles/AGENTS.scout.md` — fast reconnaissance. Use it to map unknown territory: key
+- scout — fast reconnaissance. Use it to map unknown territory: key
   directories, entry points, one-line file descriptions. It locates, it does not analyze deeply,
   and it states its interpretation when your task is ambiguous.
-- `roles/AGENTS.researcher.md` — directed research. Use it for a sourced findings brief on a
+- researcher — directed research. Use it for a sourced findings brief on a
   question you could not answer from the code alone; every conclusion cites a file path or URL.
-- `roles/AGENTS.critic.md` — independent review. Use it for an unpolluted second opinion on a
+- critic — independent review. Use it for an unpolluted second opinion on a
   plan, diff, or conclusion of yours; it answers VERDICT (agree / agree-with-changes / object)
   plus numbered findings by severity, each with quoted evidence and a concrete suggestion. It
   never rubber-stamps — give it the artifact, not your defense of it.
