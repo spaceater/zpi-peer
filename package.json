@@ -1,7 +1,7 @@
 {
   "name": "@semanaut/zpi-peer",
-  "version": "0.1.0",
-  "description": "pi extension: equal, durable peers in tmux windows plus a letter channel between any pi sessions",
+  "version": "0.1.1",
+  "description": "pi extension: equal, durable pi peers managed through tmux panes plus a letter channel between any pi sessions. Tools: peer_spawn (launch a peer in a tmux pane), peer_list (list peers, alive or exited), peer_send_mail (deliver a letter, reviving dead recipients)",
   "type": "module",
   "keywords": [
     "pi-package"
