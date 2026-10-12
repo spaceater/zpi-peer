@@ -21,9 +21,17 @@ Peers are equal instances, not subordinates: each runs in its own tmux pane, wit
 
 Mailing a dead recipient revives it automatically: the letter is delivered by first relaunching the session via `pi --session <sid>` in a new tmux pane, waiting (up to ~25s) until the pane is verifiably up, then injecting the notice — a running session gets it within ~1.5s (steer while running, followUp when idle). If the revive fails, the letter stays queued and is read at the next start. The mechanism never bypasses pi's own resume logic: no label within the budget (pi exited, or waits at an interactive prompt) counts as a failure.
 
-## Role prompts
+## Bundled role prompts
 
-Three standard role prompts — scout (fast reconnaissance), researcher (directed research), critic (independent review) — ship with the package. On every start the extension mirrors them into the peer data directory (`<agent dir>/peer/roles`); an edited or older copy is preserved as `<name>.backup` before the bundled version is written, so edits survive and upgrades still land. Any other file path can be passed to `peer_spawn`'s prompt parameter for a custom role.
+Three standard role prompts ship with the package. Pass one as `peer_spawn`'s `prompt` parameter to give a peer a persistent role:
+
+- **scout** — fast reconnaissance. Maps unknown territory: key directories, entry points, one-line file descriptions. It locates, it does not analyze deeply, and it states its interpretation when the task is ambiguous.
+- **researcher** — directed research. Produces a sourced findings brief on a question that cannot be answered from the code alone; every conclusion cites a file path or URL.
+- **critic** — independent review. An unpolluted second opinion on a plan, diff, or conclusion: answers VERDICT (agree / agree-with-changes / object) plus numbered findings by severity, each with quoted evidence and a concrete suggestion. It never rubber-stamps.
+
+All three are read-only by intent: peers launch with the full toolset, and discipline comes from the role file and the task text, not from restrictions. A peer can always mail back.
+
+On every start the extension mirrors the role files into the peer data directory (`<agent dir>/peer/roles`); an edited or older copy is preserved as `<name>.backup` before the bundled version is written, so local edits survive and upgrades still land. Any other file path works for a custom role.
 
 ## Bundled skill
 
