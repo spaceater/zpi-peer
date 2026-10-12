@@ -21,6 +21,10 @@ Peers are equal instances, not subordinates: each runs in its own tmux pane, wit
 
 Mailing a dead recipient revives it automatically: the letter is delivered by first relaunching the session via `pi --session <sid>` in a new tmux pane, waiting (up to ~25s) until the pane is verifiably up, then injecting the notice — a running session gets it within ~1.5s (steer while running, followUp when idle). If the revive fails, the letter stays queued and is read at the next start. The mechanism never bypasses pi's own resume logic: no label within the budget (pi exited, or waits at an interactive prompt) counts as a failure.
 
+## Role prompts
+
+Three standard role prompts — scout (fast reconnaissance), researcher (directed research), critic (independent review) — ship with the package. On every start the extension mirrors them into the peer data directory (`<agent dir>/peer/roles`); an edited or older copy is preserved as `<name>.backup` before the bundled version is written, so edits survive and upgrades still land. Any other file path can be passed to `peer_spawn`'s prompt parameter for a custom role.
+
 ## Bundled skill
 
 Installs the `peer-orchestrator` skill alongside the extension: the policy for when to spawn peers (only for genuinely parallel, independent work), how to write a self-contained first task, how to choose a peer's starting context, and how to batch follow-up letters.
