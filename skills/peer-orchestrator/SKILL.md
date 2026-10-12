@@ -72,9 +72,8 @@ All three are read-only by intent. Peers launch with the full toolset; disciplin
 role file and your task text, not from restrictions. A peer can always mail you back.
 
 The three role files ship inside this skill, under `roles/` — pass their paths (resolved from
-this skill's directory) to `peer_spawn`'s prompt parameter. A same-named file in
-`~/.pi/agent/` takes precedence when present, so users can override any role locally; any other
-file path works too.
+this skill's directory) to `peer_spawn`'s prompt parameter. For a custom role, pass the path of
+any other role file instead.
 
 - `roles/AGENTS.scout.md` — fast reconnaissance. Use it to map unknown territory: key
   directories, entry points, one-line file descriptions. It locates, it does not analyze deeply,
