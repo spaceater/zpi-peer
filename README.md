@@ -2,6 +2,8 @@
 
 Equal, durable pi peers plus a letter channel between any pi sessions, for [pi](https://github.com/earendil-works/pi).
 
+Developed against pi 1.1.0; see the `piVersion` field in `package.json`.
+
 Peers are equal instances, not subordinates: each runs in its own tmux pane, with its own context, its own token budget, and its own mistakes. tmux is the single source of truth for who is alive — every peer pane carries an `@pi_sid` label, and a session is considered alive exactly while a live pane still holds its label. When the pane dies, the session id goes dark but its history stays durable on disk, so the peer can always be brought back.
 
 ## Management via tmux
@@ -38,7 +40,3 @@ On every start the extension mirrors the role files into the peer data directory
 ## Bundled skill
 
 Installs the `peer-orchestrator` skill alongside the extension: the policy for when to spawn peers (only for genuinely parallel, independent work), how to write a self-contained first task, how to choose a peer's starting context, and how to batch follow-up letters.
-
-## Versioning
-
-The extension's version always matches the pi version it is built for: `1.1.0` of this package targets pi `1.1.0`, `1.2.0` targets pi `1.2.0`, and so on — install the version that matches your pi. If a release has to be repeated while the target pi version is unchanged, it gets a prerelease suffix instead: `1.1.0-2`, then `-3`, and so on. npm never allows overwriting an already-published version: every publish is a new, immutable version.
