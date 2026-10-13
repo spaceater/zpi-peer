@@ -424,7 +424,7 @@ async function revivePeer(pi: ExtensionAPI, sid: string, cwd: string, signal?: A
 export default function piPeer(pi: ExtensionAPI) {
 	syncRoles();
 	const roleDir = peerRolesDir();
-	const ROLE_HINT = `Standard roles live in ${roleDir}: AGENTS.investigator.md (find out what is true, in the codebase or outside it), AGENTS.strategist.md (system direction: options, trade-offs, a recommended balance), AGENTS.auditor.md (verify evidence, audit the path taken, then criticize).`;
+	const ROLE_HINT = `Standard roles live in ${roleDir}: AGENTS.investigator.md (find out what is true, in the codebase or outside it), AGENTS.strategist.md (make the call: options, trade-offs, a committed recommendation and what would flip it), AGENTS.auditor.md (verify by reproducing, audit the path taken, then criticize — pours cold water on warm consensus).`;
 
 	// On a revive the role must be resolved before any pending letter can start a turn —
 	// session_start does both, in that order.

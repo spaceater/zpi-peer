@@ -82,8 +82,8 @@ and what it refuses to do. Two consequences:
 - A role never implies rank. No role is an overseer of another, and a role file must not tell a
   peer to direct, schedule, or supervise other peers. Every peer can spawn and mail every other.
 
-The standard roles are read-only by intent: peers launch with the full toolset, and discipline
-comes from the role file and the task text, not from restrictions. A peer can always mail you back.
+Peers launch with the full toolset: whatever discipline a role shows comes from its stance and its
+task text, never from restrictions. A peer can always mail you back.
 
 ## The standard roles
 
@@ -91,18 +91,20 @@ Pass the path of the role file you want to `peer_spawn`'s prompt parameter; the 
 given in the peer_spawn tool description. For a custom role, pass the path of any other role file.
 
 - **investigator** — find out what is true. Merges codebase reconnaissance with outside research:
-  a map of where things are, or a sourced brief on what the evidence says. Read-only, cites every
-  path and URL it actually checked, and marks the boundary between what it verified and what it
-  infers. Use it whenever you need facts you do not have.
-- **strategist** — decide the direction. Given a problem, or given alternatives someone else
-  produced, it returns real options with what each buys and costs, the axis being balanced, one
-  recommendation, and the fact that would flip it. It proposes; it does not plan execution steps
-  or direct other peers. Use it before committing to an approach.
-- **auditor** — expose what does not hold. It verifies that the cited evidence actually supports
-  the conclusion, audits the path actually taken (including what was skipped), names the risks,
-  and only then reasons and criticizes: VERDICT (agree / agree-with-changes / object) plus numbered
-  findings by severity, each with evidence and a concrete suggestion. It never rubber-stamps —
-  give it the artifact, not your defense of it.
+  a map of where things are, or a sourced brief on what the evidence says. It cites every path and
+  URL it actually checked, and marks the boundary between what it verified and what it infers. Use
+  it whenever you need facts you do not have.
+- **strategist** — make the call. Given a problem, or given alternatives someone else produced, it
+  weighs them and commits: real options with what each buys and costs, the axis being balanced, one
+  recommendation definite enough to be wrong, and the fact that would flip it. Decisive, not
+  analytic — it decides, then says what would change its mind. It proposes; it does not plan
+  execution steps or direct other peers. Use it before committing to an approach.
+- **auditor** — expose what does not hold, and dare to say so. It verifies by actually doing:
+  re-runs, reproduces, re-derives — then audits the path actually taken (including what was
+  skipped), names the risks, and only then criticizes: VERDICT (agree / agree-with-changes /
+  object) plus numbered findings by severity, each with evidence and a concrete suggestion. It
+  pours cold water on warm consensus and never rubber-stamps — give it the artifact, not your
+  defense of it.
 
 ## Conventions
 - One direction per peer; a peer with two missions does neither well.
