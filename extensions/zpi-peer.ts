@@ -167,15 +167,21 @@ async function waitForBoot(
 const registryDir = () => path.join(getAgentDir(), "peer", "registry");
 
 const peerRolesDir = () => path.join(getAgentDir(), "peer", "roles");
-const BUNDLED_ROLES = ["AGENTS.scout.md", "AGENTS.researcher.md", "AGENTS.critic.md"];
+const BUNDLED_ROLES = ["AGENTS.investigator.md", "AGENTS.strategist.md", "AGENTS.auditor.md"];
+const RETIRED_ROLES = ["AGENTS.scout.md", "AGENTS.researcher.md", "AGENTS.critic.md"];
 const bundledRolesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "roles");
 
 /** Mirror the bundled role files into the peer data directory. An edited or older copy is kept as
- * `<name>.backup` before the bundled version is written, so every start reconciles the roles. */
+ * `<name>.backup` before the bundled version is written, so every start reconciles the roles.
+ * Retired role files are moved aside the same way — a stale role must not linger as a usable role. */
 function syncRoles(): void {
 	try {
 		const dir = peerRolesDir();
 		fs.mkdirSync(dir, { recursive: true });
+		for (const name of RETIRED_ROLES) {
+			const stale = path.join(dir, name);
+			if (fs.existsSync(stale)) fs.renameSync(stale, `${stale}.backup`);
+		}
 		for (const name of BUNDLED_ROLES) {
 			const src = path.join(bundledRolesDir, name);
 			const dst = path.join(dir, name);
@@ -418,7 +424,7 @@ async function revivePeer(pi: ExtensionAPI, sid: string, cwd: string, signal?: A
 export default function piPeer(pi: ExtensionAPI) {
 	syncRoles();
 	const roleDir = peerRolesDir();
-	const ROLE_HINT = `Standard roles live in ${roleDir}: AGENTS.scout.md (fast reconnaissance), AGENTS.researcher.md (directed research), AGENTS.critic.md (independent review).`;
+	const ROLE_HINT = `Standard roles live in ${roleDir}: AGENTS.investigator.md (find out what is true, in the codebase or outside it), AGENTS.strategist.md (system direction: options, trade-offs, a recommended balance), AGENTS.auditor.md (verify evidence, audit the path taken, then criticize).`;
 
 	// On a revive the role must be resolved before any pending letter can start a turn —
 	// session_start does both, in that order.
@@ -479,7 +485,7 @@ export default function piPeer(pi: ExtensionAPI) {
 		name: "peer_spawn",
 		label: "Spawn peer",
 		description:
-			`Spawn an equal pi peer in a tmux pane with a pre-assigned sessionId. ${SKILL_GATE} It returns only once the peer is verifiably up — it blocks up to ~${SPAWN_BOOT_TIMEOUT_MS / 1000}s until the peer labels the pane it was given, and reports a failure instead of handing back a sid that never booted. The returned sid becomes disk-durable a few seconds after return, when the peer submits its first message (pi persists the session file then, not at boot); a peer killed before that leaves no session — its sid goes dark (mail queues, resume reports not found). The task is delivered at launch as the peer's first user message. Use peer_send_mail for follow-up letters. prompt: path to a role file that stays with the peer across every start — ${ROLE_HINT} The peer-orchestrator skill describes what each role does; any other file path works for a custom role. context: omit = empty | fork:<sessionId> = fork that session's full history, and the forked peer also inherits its role unless prompt overrides it | handoff:<text> = custom context text (prepended to the first message).`,
+			`Spawn an equal pi peer in a tmux pane with a pre-assigned sessionId. ${SKILL_GATE} It returns only once the peer is verifiably up — it blocks up to ~${SPAWN_BOOT_TIMEOUT_MS / 1000}s until the peer labels the pane it was given, and reports a failure instead of handing back a sid that never booted. The returned sid becomes disk-durable a few seconds after return, when the peer submits its first message (pi persists the session file then, not at boot); a peer killed before that leaves no session — its sid goes dark (mail to it is rejected as unknown_session, resume reports not found). The task is delivered at launch as the peer's first user message. Use peer_send_mail for follow-up letters. prompt: path to a role file that stays with the peer across every start — ${ROLE_HINT} Pass a role whenever one fits the mission — it is the main way to shape a peer's stance. The peer-orchestrator skill describes what each role does; any other file path works for a custom role. context: omit = empty | fork:<sessionId> = fork that session's full history, and the forked peer also inherits its role unless prompt overrides it | handoff:<text> = custom context text (prepended to the first message).`,
 		promptGuidelines: [
 			"Use peer_spawn only when the user asked for parallel/independent work or a task clearly warrants a separate context; every letter sent via peer_send_mail costs the recipient one LLM turn.",
 		],
@@ -489,7 +495,7 @@ export default function piPeer(pi: ExtensionAPI) {
 			prompt: Type.Optional(
 				Type.String({
 					description:
-						"Path to a role-prompt file (errors if it does not exist). The role stays with the peer across every start — spawn, mail revive, or a user-run /resume — and the file is re-read per turn, so editing it takes effect without respawning. Identity follows the session: /new inside a peer's pane starts a plain session, while a fork inherits the role of the session it branched from unless this overrides it. ${ROLE_HINT} Any other file path works for a custom role; omit for a plain peer.",
+						"Path to a role-prompt file (errors if it does not exist). The role stays with the peer across every start — spawn, mail revive, or a user-run /resume — and the file is re-read per turn, so editing it takes effect without respawning. Identity follows the session: /new inside a peer's pane starts a plain session, while a fork inherits the role of the session it branched from unless this overrides it. ${ROLE_HINT} Omit only when no role fits — a plain peer has no role discipline. Any other file path works for a custom role.",
 				}),
 			),
 			context: Type.Optional(
@@ -653,14 +659,14 @@ export default function piPeer(pi: ExtensionAPI) {
 		name: "peer_send_mail",
 		label: "Send letter",
 		description:
-			`Deliver a letter to another session's mailbox (ANY pi session — peers and human-started). ${SKILL_GATE} The letter is stored as a .md file whose frontmatter header (from + summary) you write via the summary parameter. The recipient's poll injects ONLY the summary plus the file path — never the full text; the recipient reads the full letter from that path itself and deletes the file afterwards. Notices reach a running session within ~${POLL_MS / 1000}s — via steer while it is running, via followUp when it is idle — and multiple pending notices are merged into one message. A dead recipient is revived automatically, whether it was spawned as a peer or started by a human (this tool blocks up to ~${REVIVE_TIMEOUT_MS / 1000}s and reports whether the revive succeeded), and reads the notice at boot; if the revive fails the letter stays queued and is read when it next starts. The summary must be self-contained: state who you are (name/sessionId) and what the letter is about; the letter body should also say whether a reply is needed and where to send it.`,
+			`Deliver a letter to another session's mailbox (ANY pi session — peers and human-started). ${SKILL_GATE} The recipient must already exist on disk: an id with no session file is rejected with an error and nothing is written or sent (a just-spawned peer becomes addressable a few seconds after peer_spawn returns, once it persists its session file). The letter is stored as a .md file whose frontmatter header (from + summary) you write via the summary parameter. The recipient's poll injects ONLY the summary plus the file path — never the full text; the recipient reads the full letter from that path itself and deletes the file afterwards. Notices reach a running session within ~${POLL_MS / 1000}s — via steer while it is running, via followUp when it is idle — and multiple pending notices are merged into one message. A dead recipient is revived automatically, whether it was spawned as a peer or started by a human (this tool blocks up to ~${REVIVE_TIMEOUT_MS / 1000}s and reports whether the revive succeeded), and reads the notice at boot; if the revive fails the letter stays queued and is read when it next starts. The summary must be self-contained: state who you are (name/sessionId) and what the letter is about; the letter body should also say whether a reply is needed and where to send it.`,
 		promptGuidelines: [
 			"Batch peer_send_mail letters and keep them substantive: never send acknowledgements or small talk. Multiple pending notices are merged into one message, so one letter per topic is enough. Write a good summary — it is all the recipient sees before deciding to open the letter file.",
 		],
 		parameters: Type.Object({
 			to: Type.String({
 				description:
-					"Recipient sessionId: the exact lowercase 36-character UUID as peer_list prints it. May target a session that is not on disk yet (e.g. a just-spawned peer). Prefixes, a different case and any other variant are rejected — an id is never normalised into a match.",
+					"Recipient sessionId: the exact lowercase 36-character UUID as peer_list prints it. The session must already exist on disk — an id with no session file is rejected and nothing is sent. Prefixes, a different case and any other variant are rejected — an id is never normalised into a match.",
 			}),
 			summary: Type.String({
 				description:
@@ -671,7 +677,9 @@ export default function piPeer(pi: ExtensionAPI) {
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			const tmuxProblem = await tmuxGuard(pi);
 			if (tmuxProblem) return errResult("no_tmux", tmuxProblem, { state: "no_tmux" });
-			// A full id not on disk yet is fine — it may be a just-spawned peer still booting.
+			// The letter is composed but not yet on disk: a recipient that exists nowhere on disk is a typo (or a
+			// peer that never booted), so refuse it before writing anything — an unreadable letter in a dead
+			// mailbox is invisible to both sides.
 			const sid = params.to.trim();
 			if (!UUID_RE.test(sid)) {
 				return errResult(
@@ -682,19 +690,23 @@ export default function piPeer(pi: ExtensionAPI) {
 			}
 			const records = await scanAllSessions(pi);
 			const target = findSessionById(records, sid);
+			if (!target) {
+				return errResult(
+					"unknown_session",
+					`no session with id ${sid} exists on disk; nothing was sent. Pass the exact sessionId of an existing session (peer_list shows them).`,
+					{ state: "unknown_session", sessionId: sid },
+				);
+			}
 			const self = ctx.sessionManager.getSessionId();
 			const selfName = findSessionById(records, self)?.name;
 			const from = selfName ? `${selfName} (sessionId: ${self})` : `sessionId: ${self}`;
 			const letterFile = await post(sid, params.message, { from, summary: params.summary });
-			const label = target?.name ?? sid;
+			const label = target.name ?? sid;
 			const done = (state: string, text: string) => ({
 				content: [{ type: "text" as const, text: `${text} | letter file: ${letterFile}` }],
 				details: { recipient: label, sessionId: sid, state, letterFile },
 			});
 
-			if (!target) {
-				return done("queued_no_session", `sent → ${label} — no session on disk yet; the letter is queued and will be read when it starts`);
-			}
 			if (target.alive) {
 				return done("alive", `sent → ${label} — alive; it picks the letter up within ~${POLL_MS / 1000}s`);
 			}

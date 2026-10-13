@@ -23,15 +23,17 @@ Mailing a dead recipient revives it automatically: the letter is delivered by fi
 
 ## Bundled role prompts
 
-Three standard role prompts ship with the package. Pass one as `peer_spawn`'s `prompt` parameter to give a peer a persistent role:
+Three standard role prompts ship with the package. Pass one as `peer_spawn`'s `prompt` parameter to give a peer a persistent role — a role is the main lever for shaping a peer's stance, so pass one whenever it fits the mission:
 
-- **scout** — fast reconnaissance. Maps unknown territory: key directories, entry points, one-line file descriptions. It locates, it does not analyze deeply, and it states its interpretation when the task is ambiguous.
-- **researcher** — directed research. Produces a sourced findings brief on a question that cannot be answered from the code alone; every conclusion cites a file path or URL.
-- **critic** — independent review. An unpolluted second opinion on a plan, diff, or conclusion: answers VERDICT (agree / agree-with-changes / object) plus numbered findings by severity, each with quoted evidence and a concrete suggestion. It never rubber-stamps.
+- **investigator** — find out what is true. Codebase reconnaissance and outside research in one role: a map of where things are, or a sourced brief on what the evidence says. Read-only; cites every path and URL it actually checked, and marks the line between verified facts and inference.
+- **strategist** — decide the direction. Given a problem, or given alternatives someone else produced, it returns real options with what each buys and costs, the axis being balanced, one recommendation, and the fact that would flip it. It proposes; it does not plan execution steps or direct other peers.
+- **auditor** — expose what does not hold. It verifies that the cited evidence actually supports the conclusion, audits the path actually taken (including what was skipped), names the risks, and only then reasons and criticizes: VERDICT (agree / agree-with-changes / object) plus numbered findings by severity, each with evidence and a concrete suggestion.
+
+Roles here are responsibilities, not permissions. Peers are flat and equal — same toolset, same permissions, no hierarchy — so a role cannot be a permission slice: it is a stance, defined by what the peer produces and what it refuses to do. Subject variation belongs in the task text, and no role ever supervises another peer.
 
 All three are read-only by intent: peers launch with the full toolset, and discipline comes from the role file and the task text, not from restrictions. A peer can always mail back.
 
-On every start the extension mirrors the role files into the peer data directory (`<agent dir>/peer/roles`); an edited or older copy is preserved as `<name>.backup` before the bundled version is written, so local edits survive and upgrades still land. Any other file path works for a custom role.
+On every start the extension mirrors the role files into the peer data directory (`<agent dir>/peer/roles`); an edited or older copy is preserved as `<name>.backup` before the bundled version is written, so local edits survive and upgrades still land. Retired role files (`AGENTS.scout.md`, `AGENTS.researcher.md`, `AGENTS.critic.md` from 0.1.x) are moved aside as `.backup` too. Any other file path works for a custom role.
 
 ## Bundled skill
 
