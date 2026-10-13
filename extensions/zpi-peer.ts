@@ -166,14 +166,16 @@ async function waitForBoot(
 
 const registryDir = () => path.join(getAgentDir(), "peer", "registry");
 
-const peerRolesDir = () => path.join(getAgentDir(), "peer", "roles");
+const peerRolesDir = () => path.join(getAgentDir(), "peer");
 const BUNDLED_ROLES = ["AGENTS.investigator.md", "AGENTS.strategist.md", "AGENTS.auditor.md"];
 const RETIRED_ROLES = ["AGENTS.scout.md", "AGENTS.researcher.md", "AGENTS.critic.md"];
-const bundledRolesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "roles");
+const bundledRolesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Mirror the bundled role files into the peer data directory. An edited or older copy is kept as
- * `<name>.backup` before the bundled version is written, so every start reconciles the roles.
- * Retired role files are moved aside the same way — a stale role must not linger as a usable role. */
+/** Mirror the bundled role files (which sit next to the extension's parent directory) directly
+ * into <agentDir>/peer. An edited or older copy is kept as `<name>.backup` before the bundled
+ * version is written, so every start reconciles the roles — each role independently: a missing
+ * source file skips only that role. Retired role files are moved aside the same way — a stale
+ * role must not linger as a usable role. */
 function syncRoles(): void {
 	try {
 		const dir = peerRolesDir();
@@ -183,14 +185,16 @@ function syncRoles(): void {
 			if (fs.existsSync(stale)) fs.renameSync(stale, `${stale}.backup`);
 		}
 		for (const name of BUNDLED_ROLES) {
-			const src = path.join(bundledRolesDir, name);
-			const dst = path.join(dir, name);
-			const bundled = fs.readFileSync(src);
-			if (fs.existsSync(dst)) {
-				if (fs.readFileSync(dst).equals(bundled)) continue;
-				fs.renameSync(dst, `${dst}.backup`);
-			}
-			fs.copyFileSync(src, dst);
+			try {
+				const src = path.join(bundledRolesDir, name);
+				const dst = path.join(dir, name);
+				const bundled = fs.readFileSync(src);
+				if (fs.existsSync(dst)) {
+					if (fs.readFileSync(dst).equals(bundled)) continue;
+					fs.renameSync(dst, `${dst}.backup`);
+				}
+				fs.copyFileSync(src, dst);
+			} catch {} // one role's missing file must not block the other two
 		}
 	} catch {}
 }

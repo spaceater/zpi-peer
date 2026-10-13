@@ -2,8 +2,6 @@
 
 Equal, durable pi peers plus a letter channel between any pi sessions, for [pi](https://github.com/earendil-works/pi).
 
-Developed against pi 1.1.0; see the `piVersion` field in `package.json`.
-
 Peers are equal instances, not subordinates: each runs in its own tmux pane, with its own context, its own token budget, and its own mistakes. tmux is the single source of truth for who is alive — every peer pane carries an `@pi_sid` label, and a session is considered alive exactly while a live pane still holds its label. When the pane dies, the session id goes dark but its history stays durable on disk, so the peer can always be brought back.
 
 ## Management via tmux
@@ -35,7 +33,7 @@ Roles here are responsibilities, not permissions. Peers are flat and equal — s
 
 Peers launch with the full toolset: whatever discipline a role shows comes from its stance and its task text, never from restrictions. A peer can always mail back.
 
-On every start the extension mirrors the role files into the peer data directory (`<agent dir>/peer/roles`); an edited or older copy is preserved as `<name>.backup` before the bundled version is written, so local edits survive and upgrades still land. Retired role files (`AGENTS.scout.md`, `AGENTS.researcher.md`, `AGENTS.critic.md` from 0.1.x) are moved aside as `.backup` too. Any other file path works for a custom role.
+On every start the extension mirrors the bundled role files into the peer data directory (`<agent dir>/peer`); the bundled files sit next to the extension's parent directory, so when the extension is loaded from `<agent dir>/extensions` they are `<agent dir>/AGENTS.investigator.md` and so on. An edited or older copy is preserved as `<name>.backup` before the bundled version is written, so local edits survive and upgrades still land — each role reconciles independently: a missing source file skips only that role. Retired role files (`AGENTS.scout.md`, `AGENTS.researcher.md`, `AGENTS.critic.md` from 0.1.x) are moved aside as `.backup` too. Any other file path works for a custom role.
 
 ## Bundled skill
 

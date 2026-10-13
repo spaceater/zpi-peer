@@ -1,8 +1,8 @@
 {
   "name": "@semanaut/zpi-peer",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "piVersion": "1.1.0",
-  "description": "pi extension: equal, durable pi peers managed through tmux panes plus a letter channel between any pi sessions. Tools: peer_spawn (launch a peer in a tmux pane), peer_list (list peers, alive or exited), peer_send_mail (deliver a letter, reviving dead recipients). Ships investigator / strategist / auditor role prompts",
+  "description": "pi extension: equal, durable pi peers managed through tmux panes plus a letter channel between any pi sessions. Tools: peer_spawn (launch a peer in a tmux pane), peer_list (list peers, alive or exited), peer_send_mail (deliver a letter, reviving dead recipients). Ships investigator / strategist / auditor role prompts; developed against the pi version given by the piVersion field",
   "type": "module",
   "keywords": [
     "pi-package"
@@ -10,8 +10,10 @@
   "license": "MIT",
   "files": [
     "extensions",
-    "roles",
-    "skills"
+    "skills",
+    "AGENTS.investigator.md",
+    "AGENTS.strategist.md",
+    "AGENTS.auditor.md"
   ],
   "pi": {
     "extensions": [
