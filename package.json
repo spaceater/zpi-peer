@@ -2,7 +2,7 @@
   "name": "@semanaut/zpi-peer",
   "version": "2.0.1",
   "piVersion": "1.2.0",
-  "description": "pi extension: equal, durable pi peers managed through tmux panes plus a letter channel between any pi sessions. Tools: peer_spawn (launch a peer in a tmux pane), peer_list (list peers, alive or exited), peer_send_mail (deliver a letter, reviving dead recipients). Ships investigator / strategist / auditor role prompts; developed against the pi version given by the piVersion field",
+  "description": "pi extension: equal, durable pi peers managed through tmux panes plus a letter channel between any pi sessions. tmux is a Linux tool: Linux is the supported platform, and compatibility on other systems (macOS, Windows, BSD) is not guaranteed. Tools: peer_spawn (launch a peer in a tmux pane), peer_list (list peers, alive or exited), peer_send_mail (deliver a letter, reviving dead recipients). Ships investigator / strategist / auditor role prompts; developed against the pi version given by the piVersion field",
   "type": "module",
   "keywords": [
     "pi-package"
