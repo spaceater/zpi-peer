@@ -1,6 +1,6 @@
 {
   "name": "@semanaut/zpi-peer",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "piVersion": "1.2.0",
   "description": "pi extension: equal, durable pi peers managed through tmux panes plus a letter channel between any pi sessions. tmux runs on Unix-like systems (Linux, macOS, BSD; Windows via WSL/Cygwin); native Windows is not supported. Tools: peer_spawn (launch a peer in a tmux pane), peer_list (list peers, alive or exited), peer_send_mail (deliver a letter, reviving dead recipients). Ships investigator / strategist / auditor role prompts; developed against the pi version given by the piVersion field",
   "type": "module",
