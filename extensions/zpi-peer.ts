@@ -295,11 +295,15 @@ function errResult(code: string, detail: string, extra?: Record<string, unknown>
 	};
 }
 
-// Letters: <agentDir>/peer/letters/<recipientSid>/<hex>.md — one file per letter, no lock, no
-// ordering. The recipient's poll injects only the summary + file path (merged into one message)
-// and marks the letter announced by RENAMING it to acknowledged-<name>.md — the filename is the
-// dedup state, so a letter is announced at most once ever. The recipient reads and deletes the
-// file itself.
+// Letters: <agentDir>/peer/letters/<recipientSid>/pending-<hex>.md — one file per letter,
+// no lock, no ordering. The recipient's poll injects only the summary + file path (merged into
+// one message) and delivers by REMOVING the pending- prefix after issuing the notice — a
+// one-way valve: the prefix is only ever removed, never re-added; a new letter carries a
+// fresh name. pending- is the retry state: a letter still carrying it is re-considered on
+// every poll. The notice announces the prefix-less final path, which exists before any
+// consumer can look (the strip is the synchronous statement right after the send call — no
+// consumer sees the notice before this tick yields). The recipient reads and deletes the file
+// itself.
 
 const boxDir = (sid: string) => path.join(getAgentDir(), "peer", "letters", sid);
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -326,7 +330,7 @@ function formatNotice(file: string, text: string): string {
 async function post(sid: string, message: string, header: { from: string; summary: string }): Promise<string> {
 	const dir = boxDir(sid);
 	fs.mkdirSync(dir, { recursive: true });
-	const file = path.join(dir, `${randomBytes(8).toString("hex")}.md`);
+	const file = path.join(dir, `${PENDING}${randomBytes(8).toString("hex")}.md`);
 	const text = `---\nfrom: ${oneLine(header.from)}\nsummary: ${oneLine(header.summary)}\n---\n\n${message}\n`;
 	const tmp = `${file}.tmp`;
 	fs.writeFileSync(tmp, text);
@@ -334,38 +338,47 @@ async function post(sid: string, message: string, header: { from: string; summar
 	return file;
 }
 
-const ACK = "acknowledged-"; // filename prefix: this letter has already been announced
+const PENDING = "pending-"; // filename prefix: not yet announced; removed once, never re-added
 
 /** Order means nothing — one tick delivers them all merged. */
 function pendingLetters(dir: string): string[] {
 	try {
 		return fs.readdirSync(dir)
-			.filter((n) => n.endsWith(".md") && !n.startsWith(ACK))
+			.filter((n) => n.startsWith(PENDING) && n.endsWith(".md"))
 			.sort();
 	} catch {
 		return [];
 	}
 }
 
-/** Returns the renamed path (where the recipient finds it), or null if already deleted. */
-function acknowledge(dir: string, name: string): string | null {
-	try {
-		fs.renameSync(path.join(dir, name), path.join(dir, `${ACK}${name}`));
-		return path.join(dir, `${ACK}${name}`);
-	} catch {
-		return null;
-	}
-}
+// Compaction state, tracked from session events. pi rejects every prompt submission
+// while compaction runs ("Cannot submit a prompt while compaction is in progress"), and
+// pi.sendUserMessage's binding swallows that rejection (fire-and-forget; the failure is
+// only reported as a runtime extension error), so the extension cannot learn a send
+// failed — it must simply not send during the window.
+let compactionActive = false;
 
-/** Announce waiting letters merged — steer while running, followUp when idle. */
+/** Announce waiting letters merged — steer while running or starting (pi 1.2.0 counts the
+ * session busy from run start, so a letter landing there queues into the starting run
+ * instead of racing it), followUp when idle. While compaction runs the tick does nothing:
+ * pi rejects prompt submission then, the rejection is not observable through
+ * pi.sendUserMessage, and letters stay pending — the prefix IS the retry state — for the
+ * first tick after it ends.
+ *
+ * Delivery is one-way on the pending- prefix: it is stripped only AFTER the notice has been
+ * issued, and never re-added. If the send call itself throws, the strip loop never runs and
+ * the letters retry. Residual windows: a send that fails silently (the rejection is swallowed
+ * by pi's binding) inside the check-to-send gap leaves an un-announced, un-pended letter —
+ * an at-most-once loss, the only such window left; a crash after an effective send leaves the
+ * prefix on, so the letter is re-announced — a benign duplicate instead of a loss. */
 function startInboxLoop(pi: ExtensionAPI, sid: string, isIdle: () => boolean): () => void {
 	const dir = boxDir(sid);
 	let stopped = false;
 
 	const tick = () => {
-		if (stopped) return;
+		if (stopped || compactionActive) return;
 		try {
-			const batch: string[] = [];
+			const batch: Array<{ pendingPath: string; finalPath: string; text: string }> = [];
 			for (const name of pendingLetters(dir)) {
 				let text: string;
 				try {
@@ -373,12 +386,26 @@ function startInboxLoop(pi: ExtensionAPI, sid: string, isIdle: () => boolean): (
 				} catch {
 					continue; // unreadable right now: retry on a later tick
 				}
-				const file = acknowledge(dir, name);
-				if (!file) continue; // deleted underneath us: already read
-				batch.push(formatNotice(file, text));
+				batch.push({
+					pendingPath: path.join(dir, name),
+					finalPath: path.join(dir, name.slice(PENDING.length)),
+					text,
+				});
 			}
 			if (batch.length === 0) return;
-			pi.sendUserMessage(batch.join(BATCH_SEP), { deliverAs: isIdle() ? "followUp" : "steer" });
+			pi.sendUserMessage(
+					batch.map((b) => formatNotice(b.finalPath, b.text)).join(BATCH_SEP),
+					{ deliverAs: isIdle() ? "followUp" : "steer" },
+			);
+			// Strip the pending- prefix — the one-way "notice issued" transition. Reached
+			// only if the send call did not throw; no consumer can observe the notice before
+			// this synchronous rename, so the announced (prefix-less) path already exists
+			// when anyone looks.
+			for (const b of batch) {
+				try {
+					fs.renameSync(b.pendingPath, b.finalPath);
+				} catch {} // vanished underneath us: nothing to deliver
+			}
 		} catch {}
 	};
 
@@ -460,16 +487,34 @@ export default function piPeer(pi: ExtensionAPI) {
 		const sid = ctx.sessionManager.getSessionId();
 		inheritRoleFromFork(event, sid);
 		loadOwnRole(sid);
+		compactionActive = false; // the fresh session is not compacting
 		// Only a TUI owns a pane: a nested print/json pi inherits $TMUX_PANE and would steal it.
 		if (ctx.mode === "tui") await labelPane(pi, sid);
 		stopLoop?.();
 		stopLoop = startInboxLoop(pi, sid, () => ctx.isIdle());
 	});
 
+	// Track the compaction window so the inbox tick can wait it out (see startInboxLoop):
+	// session_compact_failed fires on failure AND abort — including an extension cancelling
+	// in session_before_compact — so the flag always has a reset path.
+	pi.on("session_before_compact", async () => {
+		compactionActive = true;
+	});
+	const compactionOver = async () => {
+		compactionActive = false;
+	};
+	pi.on("session_compact", compactionOver);
+	pi.on("session_compact_failed", compactionOver);
+
 	// pi persists no system prompt (--append-system-prompt vanishes on resume), so the role is
 	// re-applied EVERY turn from the file the registry points at. Identity follows the SESSION,
 	// not the process: /new inside a peer's pane runs plain; a fork inherits the branched
 	// session's role. Idempotent: skips when already present.
+	// pi 1.2.0: the event is a union on event.messageType — "user" runs (prompts,
+	// sendUserMessage) carry prompt/images, "custom" runs (sendMessage with triggerTurn)
+	// carry the starting message. The role deliberately applies to BOTH kinds: any turn the
+	// peer runs carries its stance. The forced system prompt now also survives the run's
+	// tool calls (1.2.0 fix), so the prompt cache no longer breaks mid-run over the role.
 	pi.on("before_agent_start", async (event, ctx) => {
 		// Re-resolve on session switch so the role never leaks across sessions.
 		const sid = ctx.sessionManager.getSessionId();

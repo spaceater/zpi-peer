@@ -17,6 +17,10 @@ Peers are equal instances, not subordinates: each runs in its own tmux pane, wit
 - **`peer_list`** — list sessions and their liveness, filterable by creator ("self" = your own peers).
 - **`peer_send_mail`** — deliver a letter to any pi session's mailbox, peers and human-started alike.
 
+## Compatibility
+
+zpi-peer only adds tools and session-scoped handlers and patches no pi internals, so it does not affect subagent or other orchestration extensions and can be used alongside them.
+
 ## Automatic revival
 
 Mailing a dead recipient revives it automatically: the letter is delivered by first relaunching the session via `pi --session <sid>` in a new tmux pane, waiting (up to ~25s) until the pane is verifiably up, then injecting the notice — a running session gets it within ~1.5s (steer while running, followUp when idle). If the revive fails, the letter stays queued and is read at the next start. The mechanism never bypasses pi's own resume logic: no label within the budget (pi exited, or waits at an interactive prompt) counts as a failure.
