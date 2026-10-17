@@ -14,7 +14,7 @@ Peers are equal instances, not subordinates: each runs in its own tmux pane, wit
 ## The three tools
 
 - **`peer_spawn`** — launch an equal peer in a tmux pane; optional role-prompt file and fork/handoff context.
-- **`peer_list`** — list sessions and their liveness, filterable by creator ("self" = your own peers).
+- **`peer_list`** — list sessions and their contact counts, filterable by contact ("self" = the sessions you have spawned or exchanged letters with; any sessionId = who that session communicated with).
 - **`peer_send_mail`** — deliver a letter to any pi session's mailbox, peers and human-started alike.
 
 ## Compatibility

@@ -23,18 +23,20 @@ Delivers a letter to any session's mailbox as a .md file with a frontmatter head
 The recipient's poll injects only the summary plus the file path — never the full text; the recipient
 reads the full letter itself and deletes the file afterwards. Notices reach a running session within
 ~1.5s — via steer while it is running, via followUp when it is idle — and pending notices merge into one
-message. A dead recipient is revived automatically — the call may block up to ~20s and tells you
+message. A dead recipient is revived automatically — the call may block up to ~25s and tells you
 whether the revive succeeded; on failure the letter stays queued and is read whenever that session
 next runs.
 The summary is all the recipient sees up front: state who you are (name/sessionId) and what the
 letter is about. The letter body must be self-contained: state whether a reply is needed and where
 to send it. Batch related matters into one letter — every letter costs the recipient a turn.
 
-### `peer_list(parent?, alive?, page?)`
-Lists sessions with their creator, liveness, cwd, and sessionId — newest first, 40 per page; the
+### `peer_list(contact?, page?)`
+Lists sessions with their contact count, cwd, and sessionId — newest first, 15 per page; the
 first line summarises the total count and the current page (pass `page` for older ones). Run it
-before spawning: reusing or forking an existing peer beats recreating one. Use `parent: "self"` to
-see only your own peers.
+before spawning: reusing or forking an existing peer beats recreating one — a session's whole
+history is on disk whether it is running or not, so mail it instead of spawning a duplicate. Use
+`contact: "self"` to see the sessions you have spawned or exchanged letters with (either
+direction counts); pass any other sessionId to inspect who that session has communicated with.
 
 ## Writing a spawn
 

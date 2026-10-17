@@ -18,13 +18,11 @@ const SKILL_GATE =
 	"Before calling this tool, read the peer-orchestrator skill.";
 const REVIVE_TIMEOUT_MS = 25_000;
 const SPAWN_BOOT_TIMEOUT_MS = 20_000;
-const LIST_PAGE_SIZE = 40;
-const BATCH_SEP = "\n\n──────── next letter ────────\n\n";
+const LIST_PAGE_SIZE = 15;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 interface PeerRecord {
-	creatorSessionId: string;
-	/** Absolute role-file path; absent for plain peers. */
-	appendPrompt?: string;
+	/** Absolute role-file path — a record exists only for sessions WITH a role. */
+	appendPrompt: string;
 }
 
 interface SessionRecord {
@@ -32,11 +30,10 @@ interface SessionRecord {
 	name: string | null;
 	cwd: string;
 	startedAt: number;
-	alive: boolean;
 	peer?: PeerRecord;
+	/** Sessions it spawned or exchanged letters with (both directions); ghost ids filtered out. */
+	contactIds: string[];
 }
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** v7 (time-ordered) to match pi's own session ids. */
 function uuidv7(): string {
@@ -54,7 +51,7 @@ function uuidv7(): string {
 	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-/** First gate of every peer tool: this pi must run inside tmux. A throw reads as "server down". */
+/** First gate of the tools that touch tmux (spawn / send_mail): this pi must run inside tmux. A throw reads as "server down". */
 async function tmuxGuard(pi: ExtensionAPI): Promise<string | null> {
 	if (process.env.TMUX) return null;
 	let serverUp = false;
@@ -68,10 +65,10 @@ function shq(s: string): string {
 	return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-/** The pi invocation for a pane command: works under node, bun and the compiled binary.
- *  PI_PEER_CMD, when set, overrides the launcher used for panes
- *  (a deployment pin — takes precedence over execPath). */
-function piCommandString(args: string[]): string {
+/** pi + optional first user message. Works under node, bun and the compiled binary; PI_PEER_CMD,
+ *  when set, overrides the launcher (a deployment pin). Nothing holds the pane open, so a
+ *  peer's window closes with its pi. */
+function buildCommand(opts: { args: string[]; firstMessage?: string }): string {
 	const script = process.argv[1];
 	const launcher =
 		script && !script.startsWith("/$bunfs/root/") && fs.existsSync(script)
@@ -79,14 +76,9 @@ function piCommandString(args: string[]): string {
 			: /^(node|bun)(\.exe)?$/i.test(path.basename(process.execPath))
 				? ["pi"]
 				: [process.env.PI_PEER_CMD || process.execPath];
-	return [...launcher, ...args].map(shq).join(" ");
-}
-
-/** pi + optional first user message. Nothing holds the pane open, so a peer's window closes with its pi. */
-function buildCommand(opts: { args: string[]; firstMessage?: string }): string {
 	const msg = opts.firstMessage;
 	const positional = msg === undefined || msg === "" ? "" : ` -- ${shq(/^[-@]/.test(msg) ? ` ${msg}` : msg)}`;
-	return `${piCommandString(opts.args)}${positional}`;
+	return `${[...launcher, ...opts.args].map(shq).join(" ")}${positional}`;
 }
 
 /** pi.exec can THROW instead of returning non-zero — every throw is folded into { ok: false } and never escapes. */
@@ -113,8 +105,7 @@ async function killPane(pi: ExtensionAPI, pane: string): Promise<void> {
 	} catch {}
 }
 
-// Every TUI pi labels its own pane with its sessionId; the pane dies with its pi, so the label
-// needs no TTL. print/json/rpc runs must not steal their pane's label.
+// A pane's @pi_sid is written by the TUI pi that owns it and dies with it — no TTL needed.
 
 /** pane_id -> @pi_sid of every live pane. THROWS when tmux is unreachable — never silently "nothing is alive". */
 async function paneLabels(pi: ExtensionAPI): Promise<Map<string, string>> {
@@ -129,15 +120,6 @@ async function paneLabels(pi: ExtensionAPI): Promise<Map<string, string>> {
 		if (pane && dead === "0") out.set(pane, UUID_RE.test(sid) ? sid : "");
 	}
 	return out;
-}
-
-/** Best effort — without the label this session reads as dead. */
-async function labelPane(pi: ExtensionAPI, sid: string): Promise<void> {
-	const pane = process.env.TMUX_PANE;
-	if (!pane) return;
-	try {
-		await pi.exec("tmux", ["set-option", "-p", "-t", pane, "@pi_sid", sid], {});
-	} catch {}
 }
 
 /** True only once the peer labels its pane (its session_start writes it — proof of boot). A gone pane means pi exited: fail at once. */
@@ -159,7 +141,7 @@ async function waitForBoot(
 		const label = labels.get(pane);
 		if (label === sid) return true;
 		if (label === undefined) return false;
-		await sleep(500);
+		await new Promise((r) => setTimeout(r, 500));
 	}
 	return false;
 }
@@ -169,7 +151,6 @@ const registryDir = () => path.join(getAgentDir(), "peer", "registry");
 const peerRolesDir = () => path.join(getAgentDir(), "peer");
 const BUNDLED_ROLES = ["AGENTS.investigator.md", "AGENTS.strategist.md", "AGENTS.auditor.md"];
 const RETIRED_ROLES = ["AGENTS.scout.md", "AGENTS.researcher.md", "AGENTS.critic.md"];
-const bundledRolesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Mirror the bundled role files (which sit next to the extension's parent directory) directly
  * into <agentDir>/peer. An edited or older copy is kept as `<name>.backup` before the bundled
@@ -186,7 +167,7 @@ function syncRoles(): void {
 		}
 		for (const name of BUNDLED_ROLES) {
 			try {
-				const src = path.join(bundledRolesDir, name);
+				const src = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", name);
 				const dst = path.join(dir, name);
 				const bundled = fs.readFileSync(src);
 				if (fs.existsSync(dst)) {
@@ -206,18 +187,18 @@ function expandPath(p: string): string {
 	return p;
 }
 
-// Peer identity lives ONLY here, never in session files — a fork cannot pollute it by
-// file copying, and no scan can miss it. The spawner writes before launching, newest-wins.
+// Peer role identity lives ONLY here, never in session files — a fork cannot pollute it by
+// file copying, and no scan can miss it. A record exists only for sessions WITH a role;
+// plain peers carry no .json at all. Legacy records with creatorSessionId are ignored on read.
 function writePeerRecord(sid: string, rec: PeerRecord): void {
 	fs.mkdirSync(registryDir(), { recursive: true });
-	const norm: PeerRecord = rec.appendPrompt ? { ...rec, appendPrompt: expandPath(rec.appendPrompt) } : rec;
 	const file = path.join(registryDir(), `${sid}.json`);
 	const tmp = `${file}.tmp`;
-	fs.writeFileSync(tmp, JSON.stringify(norm));
+	fs.writeFileSync(tmp, JSON.stringify({ appendPrompt: expandPath(rec.appendPrompt) }));
 	fs.renameSync(tmp, file); // tmp+rename: readers never see a half-written record
 }
 
-// Records are write-once, so this cache (negatives included) never goes stale.
+// Role records are write-once (the role path never changes), so this cache (negatives included) never goes stale.
 const recordCache = new Map<string, PeerRecord | null>();
 
 function readPeerRecord(sid: string): PeerRecord | null {
@@ -226,10 +207,35 @@ function readPeerRecord(sid: string): PeerRecord | null {
 	let rec: PeerRecord | null = null;
 	try {
 		const raw = JSON.parse(fs.readFileSync(path.join(registryDir(), `${sid}.json`), "utf-8"));
-		if (raw && typeof raw.creatorSessionId === "string") rec = raw as PeerRecord;
+		if (raw && typeof raw.appendPrompt === "string") rec = { appendPrompt: raw.appendPrompt };
 	} catch {}
 	recordCache.set(sid, rec);
 	return rec;
+}
+
+const contactsFile = (sid: string) => path.join(registryDir(), `${sid}.contacts`);
+
+/** Append-only contact log: one sessionId per line, both directions written by whoever acts
+ *  (spawn or letter). A single short O_APPEND write is atomic under the kernel's inode lock, so
+ *  concurrent writers never overwrite each other — there is no read-modify-write to race. A
+ *  crash mid-write leaves at most a partial line, which readContacts drops via the UUID check;
+ *  duplicates are harmless because reads dedupe. */
+function addContact(a: string, b: string): void {
+	try {
+		fs.mkdirSync(registryDir(), { recursive: true });
+		fs.appendFileSync(contactsFile(a), `${b}\n`);
+		fs.appendFileSync(contactsFile(b), `${a}\n`);
+	} catch {} // best effort: a lost line only narrows a future peer_list filter
+}
+
+function readContacts(sid: string): string[] {
+	let raw: string;
+	try {
+		raw = fs.readFileSync(contactsFile(sid), "utf-8");
+	} catch {
+		return [];
+	}
+	return [...new Set(raw.split("\n").filter((l) => UUID_RE.test(l)))];
 }
 
 function deletePeerRecord(sid: string): void {
@@ -239,27 +245,11 @@ function deletePeerRecord(sid: string): void {
 	recordCache.delete(sid);
 }
 
-function listPeerRecords(): Map<string, PeerRecord> {
-	const out = new Map<string, PeerRecord>();
-	let names: string[];
-	try {
-		names = fs.readdirSync(registryDir());
-	} catch {
-		return out;
-	}
-	for (const n of names) {
-		if (!n.endsWith(".json")) continue;
-		const sid = n.slice(0, -".json".length);
-		const rec = readPeerRecord(sid);
-		if (rec) out.set(sid, rec);
-	}
-	return out;
-}
-
-/** Sessions on disk joined with the registry. Uses pi's listAll(): its parser lets the LAST session_info win, naming a fork after itself, not its parent. */
+/** Sessions on disk joined with the registry — a pure disk read, no tmux. pi's listAll() parser
+ *  lets the LAST session_info win, naming a fork after itself, not its parent. Liveness is
+ *  deliberately absent: a pane-level fact, queried per sid only where it matters (send_mail). */
 async function scanAllSessions(pi: ExtensionAPI): Promise<SessionRecord[]> {
 	const infos = await SessionManager.listAll();
-	const alive = new Set((await paneLabels(pi)).values());
 	const records: SessionRecord[] = infos.map((info) => {
 		const started = info.created.getTime();
 		return {
@@ -267,13 +257,14 @@ async function scanAllSessions(pi: ExtensionAPI): Promise<SessionRecord[]> {
 			name: info.name ?? null,
 			cwd: info.cwd,
 			startedAt: Number.isNaN(started) ? info.modified.getTime() : started,
-			alive: alive.has(info.id),
+			contactIds: [],
 		};
 	});
-	const peers = listPeerRecords();
+	const known = new Set(records.map((r) => r.sessionId));
 	for (const r of records) {
-		const rec = peers.get(r.sessionId);
+		const rec = readPeerRecord(r.sessionId);
 		if (rec) r.peer = rec;
+		r.contactIds = readContacts(r.sessionId).filter((id) => known.has(id));
 	}
 	records.sort((a, b) => b.startedAt - a.startedAt);
 	return records;
@@ -283,7 +274,6 @@ async function scanAllSessions(pi: ExtensionAPI): Promise<SessionRecord[]> {
 function findSessionById(records: SessionRecord[], sessionId: string): SessionRecord | undefined {
 	return records.find((r) => r.sessionId === sessionId);
 }
-const fmtTime = (ms: number) => new Date(ms).toISOString().replace("T", " ").slice(0, 16);
 
 /** Uniform failed-tool result: "<code>: <detail>" text plus structured { code, message, …extra }. */
 function errResult(code: string, detail: string, extra?: Record<string, unknown>) {
@@ -308,20 +298,14 @@ function errResult(code: string, detail: string, extra?: Record<string, unknown>
 const boxDir = (sid: string) => path.join(getAgentDir(), "peer", "letters", sid);
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
 
-/** Parse a letter's frontmatter header (from + summary), as written by post(). */
-function parseLetterHeader(text: string): { from: string | null; summary: string | null } {
-	const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
-	if (!m) return { from: null, summary: null };
-	const pick = (key: string) => new RegExp(`^${key}:[ \\t]*(.*)$`, "m").exec(m[1])?.[1]?.trim() || null;
-	return { from: pick("from"), summary: pick("summary") };
-}
-
 function formatNotice(file: string, text: string): string {
-	const { from, summary } = parseLetterHeader(text);
+	// frontmatter (from + summary) as written by post()
+	const header = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? "";
+	const pick = (key: string) => new RegExp(`^${key}:[ \\t]*(.*)$`, "m").exec(header)?.[1]?.trim() || null;
 	return [
 		`New letter received.`,
-		`From: ${from ?? "unknown sender"}`,
-		`Summary: ${summary ?? "(no summary header)"}`,
+		`From: ${pick("from") ?? "unknown sender"}`,
+		`Summary: ${pick("summary") ?? "(no summary header)"}`,
 		`Full letter file: "${file}" — read it yourself with the read tool, delete the letter file (rm) after reading so letters won't pile up.`,
 	].join("\n");
 }
@@ -394,7 +378,7 @@ function startInboxLoop(pi: ExtensionAPI, sid: string, isIdle: () => boolean): (
 			}
 			if (batch.length === 0) return;
 			pi.sendUserMessage(
-					batch.map((b) => formatNotice(b.finalPath, b.text)).join(BATCH_SEP),
+					batch.map((b) => formatNotice(b.finalPath, b.text)).join("\n\n──────── next letter ────────\n\n"),
 					{ deliverAs: isIdle() ? "followUp" : "steer" },
 			);
 			// Strip the pending- prefix — the one-way "notice issued" transition. Reached
@@ -468,16 +452,15 @@ export default function piPeer(pi: ExtensionAPI) {
 		appendPromptPath = readPeerRecord(sid)?.appendPrompt ?? null;
 	};
 
-	// A fork keeps the branched session's role; an existing record is never copied over —
-	// the spawner's own write (copy, then override) is newer and wins.
+	// A fork keeps the branched session's role; an existing record (the spawner's write) is never overwritten.
 	const inheritRoleFromFork = (event: { reason?: string; previousSessionFile?: string }, ownSid: string) => {
 		if (event.reason !== "fork" || !event.previousSessionFile) return;
 		const file = path.basename(event.previousSessionFile);
 		const srcSid = file.endsWith(".jsonl") ? file.slice(0, -".jsonl".length).split("_").pop() : undefined;
 		if (!srcSid || fs.existsSync(path.join(registryDir(), `${ownSid}.json`))) return;
 		const src = readPeerRecord(srcSid);
-		if (!src?.appendPrompt) return;
-		writePeerRecord(ownSid, { ...src });
+		if (!src) return;
+		writePeerRecord(ownSid, { appendPrompt: src.appendPrompt }); // role only — contacts are never inherited
 		recordCache.delete(ownSid); // a lookup may already have cached "no record" for this sid
 	};
 
@@ -487,9 +470,14 @@ export default function piPeer(pi: ExtensionAPI) {
 		const sid = ctx.sessionManager.getSessionId();
 		inheritRoleFromFork(event, sid);
 		loadOwnRole(sid);
-		compactionActive = false; // the fresh session is not compacting
+		compactionActive = false;
 		// Only a TUI owns a pane: a nested print/json pi inherits $TMUX_PANE and would steal it.
-		if (ctx.mode === "tui") await labelPane(pi, sid);
+		// Best effort — without the label this session reads as dead.
+		if (ctx.mode === "tui" && process.env.TMUX_PANE) {
+			try {
+				await pi.exec("tmux", ["set-option", "-p", "-t", process.env.TMUX_PANE, "@pi_sid", sid], {});
+			} catch {}
+		}
 		stopLoop?.();
 		stopLoop = startInboxLoop(pi, sid, () => ctx.isIdle());
 	});
@@ -567,7 +555,7 @@ export default function piPeer(pi: ExtensionAPI) {
 
 			let mode = "empty";
 			let forkSid: string | undefined;
-			let inherited: PeerRecord | undefined;
+			let inheritedRole: string | undefined;
 			let payload: string | undefined;
 			const ctxArg = (params.context ?? "").trim();
 			if (ctxArg) {
@@ -581,7 +569,7 @@ export default function piPeer(pi: ExtensionAPI) {
 					if (!source) return fail("unknown_session", `fork: no session with id ${src} (try peer_list)`);
 					mode = "fork";
 					forkSid = src;
-					inherited = source.peer; // the forked session's registry fields, overridden below
+					inheritedRole = source.peer?.appendPrompt;
 				} else if (kind === "handoff") {
 					mode = "handoff";
 					payload = rest;
@@ -590,17 +578,13 @@ export default function piPeer(pi: ExtensionAPI) {
 				}
 			}
 
-			let appendPrompt: string | undefined;
+			let role: string | undefined;
 			if (params.prompt) {
-				appendPrompt = expandPath(params.prompt);
-				if (!fs.existsSync(appendPrompt)) return fail("prompt_file_missing", `prompt file not found: ${params.prompt}`);
+				role = expandPath(params.prompt);
+				if (!fs.existsSync(role)) return fail("prompt_file_missing", `prompt file not found: ${params.prompt}`);
 			}
-			// Newest-wins: a fork copies the source record, this spawn's fields override it.
-			writePeerRecord(sid, {
-				...(inherited ?? {}),
-				creatorSessionId: ctx.sessionManager.getSessionId(),
-				...(appendPrompt ? { appendPrompt } : {}),
-			});
+			if (!role) role = inheritedRole;
+			if (role) writePeerRecord(sid, { appendPrompt: role });
 
 			// No --append-system-prompt: the role hook re-applies the role file every turn.
 			const piArgs: string[] = ["--session-id", sid, "--name", name];
@@ -628,7 +612,6 @@ export default function piPeer(pi: ExtensionAPI) {
 				return fail("boot_failed", launched.message);
 			}
 
-			// No sid is reported until the peer labels its pane.
 			if (!(await waitForBoot(pi, sid, launched.pane, signal))) {
 				const why = signal?.aborted
 					? "spawn cancelled while waiting for the peer to start"
@@ -637,6 +620,7 @@ export default function piPeer(pi: ExtensionAPI) {
 				await killPane(pi, launched.pane);
 				return fail("boot_failed", `${why} — pane=${launched.pane} (closed)`);
 			}
+			addContact(ctx.sessionManager.getSessionId(), sid); // a spawn counts as contact
 			const message = `peer launched: ${name} | sessionId=${sid} | context=${mode} | pane=${launched.pane} — the peer is up and the task was delivered as its first message; use peer_send_mail for follow-up letters`;
 			return {
 				content: [{ type: "text" as const, text: message }],
@@ -649,33 +633,33 @@ export default function piPeer(pi: ExtensionAPI) {
 		name: "peer_list",
 		label: "List sessions",
 		description:
-			"List pi sessions, alive or exited. " + SKILL_GATE + " The first line summarises the total count and the current page (40 sessions per page, newest first; pass page for older ones). Then one line per session: name | creator (`created by sessionId: <id>` for a spawned peer, `created by user manually` for a human-started one) | alive | not alive | absolute cwd | YYYY-MM-DD HH:MM | sessionId. parent:'self' filters to peers spawned by this session. To read a session's transcript, resolve its file by sessionId: `find <agentDir>/sessions -name '*_<sessionId>.jsonl'`.",
+			"List pi sessions. " + SKILL_GATE + " The first line summarises the total count and the current page (15 sessions per page, newest first; pass page for older ones). Then one line per session: name | contacts (how many sessions it has spawned or exchanged letters with, either direction) | absolute cwd | YYYY-MM-DD HH:MM | sessionId. contact filters to the sessions that have communicated with one session — pass \"self\" or any exact lowercase 36-character sessionId; a spawn and an exchanged letter both count. To read a session's transcript, resolve its file by sessionId: `find <agentDir>/sessions -name '*_<sessionId>.jsonl'`.",
 		parameters: Type.Object({
-			parent: Type.Optional(
-				Type.String({ description: 'Creator sessionId (exact lowercase 36-character UUID), or "self" for this session; peers only' }),
+			contact: Type.Optional(
+				Type.String({
+					description:
+						'Filter to sessions that have communicated with one session: "self" for this session, or the exact lowercase 36-character UUID of any session. A spawn or an exchanged letter counts, in either direction.',
+				}),
 			),
-			alive: Type.Optional(Type.Boolean({ description: "true = only alive, false = only not alive" })),
 			page: Type.Optional(
 				Type.Number({ description: `1-based page number, ${LIST_PAGE_SIZE} sessions per page (default: 1)` }),
 			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const tmuxProblem = await tmuxGuard(pi);
-			if (tmuxProblem) return errResult("no_tmux", tmuxProblem, { total: 0 });
 			const self = ctx.sessionManager.getSessionId();
 			let recs = await scanAllSessions(pi);
-			if (params.parent) {
-				const creator = params.parent === "self" ? self : params.parent.trim();
-				if (!UUID_RE.test(creator)) {
+			if (params.contact) {
+				const target = params.contact === "self" ? self : params.contact.trim();
+				if (!UUID_RE.test(target)) {
 					return errResult(
-						"bad_parent",
-						`"${params.parent}" is not a sessionId. Pass "self" or the exact lowercase 36-character UUID as peer_list prints it.`,
+						"bad_contact",
+						`"${params.contact}" is not a sessionId. Pass "self" or the exact lowercase 36-character UUID as peer_list prints it.`,
 						{ total: 0 },
 					);
 				}
-				recs = recs.filter((r) => r.peer?.creatorSessionId === creator);
+				const ids = new Set(readContacts(target));
+				recs = recs.filter((r) => ids.has(r.sessionId));
 			}
-			if (params.alive !== undefined) recs = recs.filter((r) => r.alive === params.alive);
 
 			const total = recs.length;
 			const totalPages = Math.max(1, Math.ceil(total / LIST_PAGE_SIZE));
@@ -689,8 +673,8 @@ export default function piPeer(pi: ExtensionAPI) {
 			}
 			const start = (page - 1) * LIST_PAGE_SIZE;
 			const lines = recs.slice(start, start + LIST_PAGE_SIZE).map((r) => {
-				const by = r.peer ? `created by sessionId: ${r.peer.creatorSessionId}` : "created by user manually";
-				return `${r.name ?? "—"} | ${by} | ${r.alive ? "alive" : "not alive"} | ${r.cwd} | ${fmtTime(r.startedAt)} | ${r.sessionId}`;
+				const time = new Date(r.startedAt).toISOString().replace("T", " ").slice(0, 16);
+				return `${r.name ?? "—"} | contacts: ${r.contactIds.length || "none"} | ${r.cwd} | ${time} | ${r.sessionId}`;
 			});
 			const shown = lines.length;
 			const header = `total: ${total} matching session${total === 1 ? "" : "s"} | page ${page}/${totalPages}${shown > 0 ? ` | showing ${start + 1}-${start + shown}` : ""}`;
@@ -750,13 +734,16 @@ export default function piPeer(pi: ExtensionAPI) {
 			const selfName = findSessionById(records, self)?.name;
 			const from = selfName ? `${selfName} (sessionId: ${self})` : `sessionId: ${self}`;
 			const letterFile = await post(sid, params.message, { from, summary: params.summary });
+			addContact(self, sid); // an exchanged letter counts as contact
 			const label = target.name ?? sid;
 			const done = (state: string, text: string) => ({
 				content: [{ type: "text" as const, text: `${text} | letter file: ${letterFile}` }],
 				details: { recipient: label, sessionId: sid, state, letterFile },
 			});
 
-			if (target.alive) {
+			// paneLabels throws if tmux died mid-call (we are behind tmuxGuard) — an honest error
+			// beats a false "not alive" that would push a live peer down the revive path.
+			if ([...(await paneLabels(pi)).values()].includes(sid)) {
 				return done("alive", `sent → ${label} — alive; it picks the letter up within ~${POLL_MS / 1000}s`);
 			}
 			// Empty recorded cwd (old sessions) falls back to the sender's.
