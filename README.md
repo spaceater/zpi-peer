@@ -11,11 +11,18 @@ Peers are equal instances, not subordinates: each runs in its own tmux pane, wit
 - **Revive**: a dark session is restarted with `pi --session <sid>` in a fresh pane, restoring its full history. The sid becomes disk-durable once the peer submits its first message; a peer killed before that cannot be resumed.
 - **Normal tmux workflow works**: switch panes/windows, watch a peer work live in its pane, kill it with tmux when done.
 
-## The three tools
+## The four tools
 
-- **`peer_spawn`** — launch an equal peer in a tmux pane; optional role-prompt file and fork/handoff context.
+- **`peer_spawn(name, task, prompt?, context?, model?)`** — launch an equal peer in a tmux pane. The peer is named `[peer]<name>`; the name is the peer's identity carrier, so make it declare function, responsibility, and state. Optional role-prompt file and fork/handoff context.
 - **`peer_list`** — list sessions and their contact counts, filterable by contact ("self" = the sessions you have spawned or exchanged letters with; any sessionId = who that session communicated with).
-- **`peer_send_mail`** — deliver a letter to any pi session's mailbox, peers and human-started alike.
+- **`peer_send_mail`** — deliver a letter to any pi session's mailbox, peers and human-started alike; a dead recipient is revived automatically.
+- **`peer_name`** — read or set a session's own name. Omit the argument to read the name as it exists on disk (the last `session_info` entry — the same value every external reader sees); pass a name to set it, effective immediately. The tool never touches another session: renaming another peer goes through a letter, so the peer also learns why its name changed.
+
+## Data layout
+
+- `<agent dir>/peer/registry/<sessionId>/role.json` — role record (exists only for sessions with a role; plain peers carry none).
+- `<agent dir>/peer/registry/<sessionId>/contacts.txt` — append-only contact log, one sessionId per line.
+- `<agent dir>/peer/letters/<sessionId>/` — the session's mailbox (`pending-*.md` letters awaiting delivery).
 
 ## Compatibility
 
@@ -41,4 +48,4 @@ On every start the extension mirrors the bundled role files into the peer data d
 
 ## Bundled skill
 
-Installs the `peer-orchestrator` skill alongside the extension: the policy for when to spawn peers (only for genuinely parallel, independent work), how to write a self-contained first task, how to choose a peer's starting context, and how to batch follow-up letters.
+Installs the `peer-orchestrator` skill alongside the extension: the policy for when to spawn peers (only for genuinely parallel, independent work), how to name them (the name is the identity carrier — function, responsibility, state — and must be kept in sync as the peer's state changes), how to write a self-contained first task, how to choose a peer's starting context, and how to batch follow-up letters.

@@ -189,13 +189,15 @@ function expandPath(p: string): string {
 
 // Peer role identity lives ONLY here, never in session files — a fork cannot pollute it by
 // file copying, and no scan can miss it. A record exists only for sessions WITH a role;
-// plain peers carry no .json at all. Legacy records with creatorSessionId are ignored on read.
+// plain peers carry no role.json at all.
+const sessionDir = (sid: string) => path.join(registryDir(), sid);
+const roleFile = (sid: string) => path.join(sessionDir(sid), "role.json");
+
 function writePeerRecord(sid: string, rec: PeerRecord): void {
-	fs.mkdirSync(registryDir(), { recursive: true });
-	const file = path.join(registryDir(), `${sid}.json`);
-	const tmp = `${file}.tmp`;
+	fs.mkdirSync(sessionDir(sid), { recursive: true });
+	const tmp = `${roleFile(sid)}.tmp`;
 	fs.writeFileSync(tmp, JSON.stringify({ appendPrompt: expandPath(rec.appendPrompt) }));
-	fs.renameSync(tmp, file); // tmp+rename: readers never see a half-written record
+	fs.renameSync(tmp, roleFile(sid)); // tmp+rename: readers never see a half-written record
 }
 
 // Role records are write-once (the role path never changes), so this cache (negatives included) never goes stale.
@@ -206,14 +208,14 @@ function readPeerRecord(sid: string): PeerRecord | null {
 	if (hit !== undefined) return hit;
 	let rec: PeerRecord | null = null;
 	try {
-		const raw = JSON.parse(fs.readFileSync(path.join(registryDir(), `${sid}.json`), "utf-8"));
+		const raw = JSON.parse(fs.readFileSync(roleFile(sid), "utf-8"));
 		if (raw && typeof raw.appendPrompt === "string") rec = { appendPrompt: raw.appendPrompt };
 	} catch {}
 	recordCache.set(sid, rec);
 	return rec;
 }
 
-const contactsFile = (sid: string) => path.join(registryDir(), `${sid}.contacts`);
+const contactsFile = (sid: string) => path.join(sessionDir(sid), "contacts.txt");
 
 /** Append-only contact log: one sessionId per line, both directions written by whoever acts
  *  (spawn or letter). A single short O_APPEND write is atomic under the kernel's inode lock, so
@@ -222,7 +224,8 @@ const contactsFile = (sid: string) => path.join(registryDir(), `${sid}.contacts`
  *  duplicates are harmless because reads dedupe. */
 function addContact(a: string, b: string): void {
 	try {
-		fs.mkdirSync(registryDir(), { recursive: true });
+		fs.mkdirSync(sessionDir(a), { recursive: true });
+		fs.mkdirSync(sessionDir(b), { recursive: true });
 		fs.appendFileSync(contactsFile(a), `${b}\n`);
 		fs.appendFileSync(contactsFile(b), `${a}\n`);
 	} catch {} // best effort: a lost line only narrows a future peer_list filter
@@ -238,9 +241,11 @@ function readContacts(sid: string): string[] {
 	return [...new Set(raw.split("\n").filter((l) => UUID_RE.test(l)))];
 }
 
+// Removes the whole session folder: spawn-failure paths call this before any contact exists,
+// so the folder holds at most role.json — a sid that never booted never lingers.
 function deletePeerRecord(sid: string): void {
 	try {
-		fs.unlinkSync(path.join(registryDir(), `${sid}.json`));
+		fs.rmSync(sessionDir(sid), { recursive: true, force: true });
 	} catch {}
 	recordCache.delete(sid);
 }
@@ -273,6 +278,40 @@ async function scanAllSessions(pi: ExtensionAPI): Promise<SessionRecord[]> {
 // Exact match only: ids are time-ordered UUIDs, so a prefix match is ambiguous.
 function findSessionById(records: SessionRecord[], sessionId: string): SessionRecord | undefined {
 	return records.find((r) => r.sessionId === sessionId);
+}
+
+/** This session's file, located the way the tools tell models to: the <timestamp>_<sid>.jsonl file somewhere under <agentDir>/sessions/. */
+function findSessionFile(sid: string): string | null {
+	const root = path.join(getAgentDir(), "sessions");
+	try {
+		for (const dir of fs.readdirSync(root, { withFileTypes: true })) {
+			if (!dir.isDirectory()) continue;
+			for (const f of fs.readdirSync(path.join(root, dir.name))) {
+				if (f.endsWith(`_${sid}.jsonl`)) return path.join(root, dir.name, f);
+			}
+		}
+	} catch {}
+	return null;
+}
+
+/** The name as every external reader sees it: the LAST session_info entry of the session file.
+ *  The file is the single source of truth — pi's in-memory copy is deliberately never consulted. */
+function readNameFromFile(sid: string): { name: string | null; file: string | null } {
+	const file = findSessionFile(sid);
+	if (!file) return { name: null, file: null };
+	let name: string | null = null;
+	try {
+		for (const line of fs.readFileSync(file, "utf-8").split("\n")) {
+			if (!line) continue;
+			try {
+				const entry = JSON.parse(line);
+				if (entry?.type === "session_info") name = typeof entry.name === "string" ? entry.name : null;
+			} catch {} // a torn trailing line is not a rename; the only writer of the file is pi itself
+		}
+	} catch {
+		return { name: null, file };
+	}
+	return { name, file };
 }
 
 /** Uniform failed-tool result: "<code>: <detail>" text plus structured { code, message, …extra }. */
@@ -457,7 +496,7 @@ export default function piPeer(pi: ExtensionAPI) {
 		if (event.reason !== "fork" || !event.previousSessionFile) return;
 		const file = path.basename(event.previousSessionFile);
 		const srcSid = file.endsWith(".jsonl") ? file.slice(0, -".jsonl".length).split("_").pop() : undefined;
-		if (!srcSid || fs.existsSync(path.join(registryDir(), `${ownSid}.json`))) return;
+		if (!srcSid || fs.existsSync(roleFile(ownSid))) return;
 		const src = readPeerRecord(srcSid);
 		if (!src) return;
 		writePeerRecord(ownSid, { appendPrompt: src.appendPrompt }); // role only — contacts are never inherited
@@ -527,7 +566,7 @@ export default function piPeer(pi: ExtensionAPI) {
 			"Use peer_spawn only when the user asked for parallel/independent work or a task clearly warrants a separate context; every letter sent via peer_send_mail costs the recipient one LLM turn.",
 		],
 		parameters: Type.Object({
-			topic: Type.String({ description: "Session topic; the peer is named '[peer]<topic>'" }),
+			name: Type.String({ description: "Session name seed; the peer is named '[peer]<name>'" }),
 			task: Type.String({ description: "Self-contained first message; delivered at launch as the peer's first user message" }),
 			prompt: Type.Optional(
 				Type.String({
@@ -551,7 +590,7 @@ export default function piPeer(pi: ExtensionAPI) {
 
 			// Pre-assigned id: --session-id creates exactly this session; the wait after launch only confirms it.
 			const sid = uuidv7();
-			const name = `[peer]${params.topic}`.slice(0, 60);
+			const name = `[peer]${params.name}`;
 
 			let mode = "empty";
 			let forkSid: string | undefined;
@@ -754,6 +793,51 @@ export default function piPeer(pi: ExtensionAPI) {
 						"revive_failed",
 						`sent → ${label} — not alive and the revive FAILED (${r.message}); the letter is queued and will be read whenever it next starts`,
 					);
+		},
+	});
+
+	// Self-only by design: a rename of ANOTHER session is a request, not a write — it goes through a
+	// letter (peer_send_mail), so the recipient also learns WHY its name changed. The read path is
+	// the file tail on purpose: it is the same value every external reader (peer_list) sees.
+	pi.registerTool({
+		name: "peer_name",
+		label: "Read or set own session name",
+		description:
+			"Read or set THIS session's name — a peer's identity carrier: it declares what this session does, what it is responsible for, and its current state; peer_list shows it first, and it is often the only thing a reader sees before deciding to mail, fork, or skip. " + SKILL_GATE + " Omit name to read the current name exactly as it exists on disk — the last session_info entry of this session's file, the same value every external reader sees; a session with no name entry reads as unnamed. Pass name to set it — effective immediately for this process and on disk. This tool never touches another session: to change another session's name (dead or alive — peer_send_mail revives a dead recipient), send a letter stating the reason and the new name; the recipient renames itself.",
+		promptGuidelines: [
+			"A name change is almost always a state change: update your own name with peer_name in the same run that changes your state (retirement, redirection, reassignment) — never rename another session, ask it by letter.",
+		],
+		parameters: Type.Object({
+			name: Type.Optional(
+				Type.String({
+					description: "New name for this session — function, responsibility, and state. Omit to read the current name.",
+				}),
+			),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const sid = ctx.sessionManager.getSessionId();
+			if (params.name === undefined) {
+				const { name, file } = readNameFromFile(sid);
+				const text = name
+					? `this session's name: ${name}`
+					: file
+						? "this session has no name on disk yet — set one with peer_name (function, responsibility, state)."
+						: "this session's file is not on disk yet (pi persists it with this session's first submitted message); a name set now takes effect in this process and lands on disk with the file.";
+				return { content: [{ type: "text" as const, text }], details: { name, sessionId: sid, file } };
+			}
+			const name = params.name.trim();
+			if (!name) {
+				return errResult(
+					"bad_name",
+					"a name cannot be empty or whitespace-only — pass a non-empty name, or omit it to read the current name.",
+				);
+			}
+			pi.setSessionName(name);
+			const message = `session renamed: ${name} — effective immediately for this process and on disk; peer_list and every file reader see it from now on`;
+			return {
+				content: [{ type: "text" as const, text: message }],
+				details: { name, sessionId: sid, message },
+			};
 		},
 	});
 }
