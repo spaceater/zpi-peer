@@ -51,12 +51,56 @@ function uuidv7(): string {
 	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/** Resolved tmux binary, cached for the process lifetime. On macOS, Homebrew's tmux
+ *  (/opt/homebrew/bin, /usr/local/bin) is routinely missing from the PATH a GUI-launched
+ *  process inherits, so the resolver falls back to those locations. */
+let tmuxBin: string | null = null;
+let tmuxResolved = false;
+const TMUX_FALLBACKS = ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux"];
+
+function tmuxNotFoundMessage(): string {
+	const mac = process.platform === "darwin";
+	return `tmux was not found${mac ? " on PATH or in the usual Homebrew locations (/opt/homebrew/bin, /usr/local/bin)" : " on PATH"}.
+${mac ? "Install it with `brew install tmux`, then restart this pi inside tmux." : "Install tmux, then restart this pi inside tmux."}
+peer_spawn / peer_list / peer_send_mail cannot work without tmux.`;
+}
+
+async function tmux(pi: ExtensionAPI): Promise<string | null> {
+	if (tmuxResolved) return tmuxBin;
+	tmuxResolved = true;
+	try {
+		if ((await pi.exec("tmux", ["-V"], {})).code === 0) {
+			tmuxBin = "tmux";
+			return tmuxBin;
+		}
+	} catch {}
+	if (process.platform === "darwin") {
+		for (const p of TMUX_FALLBACKS) {
+			try {
+				fs.accessSync(p, fs.constants.X_OK);
+				tmuxBin = p;
+				return tmuxBin;
+			} catch {}
+		}
+	}
+	return null;
+}
+
+/** Every tmux call goes through here so the resolved binary is used consistently —
+ *  a fallback path found by the resolver must not break later calls that still said "tmux". */
+async function tx(pi: ExtensionAPI, args: string[], opts?: Record<string, unknown>) {
+	const bin = await tmux(pi);
+	if (!bin) throw new Error(tmuxNotFoundMessage());
+	return pi.exec(bin, args, opts ?? {});
+}
+
 /** First gate of the tools that touch tmux (spawn / send_mail): this pi must run inside tmux. A throw reads as "server down". */
 async function tmuxGuard(pi: ExtensionAPI): Promise<string | null> {
 	if (process.env.TMUX) return null;
+	if (!(await tmux(pi))) return tmuxNotFoundMessage();
 	let serverUp = false;
 	try {
-		serverUp = (await pi.exec("tmux", ["list-sessions"], {})).code === 0;
+		serverUp = (await tx(pi, ["list-sessions"])).code === 0;
 	} catch {}
 	return serverUp ? NOT_IN_TMUX_SERVER_UP : NOT_IN_TMUX_SERVER_DOWN;
 }
@@ -90,7 +134,7 @@ async function launchPane(
 ): Promise<{ ok: true; pane: string } | { ok: false; message: string }> {
 	try {
 		// -d: the peer's window must not steal focus from whatever the user is looking at.
-		const r = await pi.exec("tmux", ["new-window", "-d", "-P", "-F", "#{pane_id}", "-c", cwd, cmdStr], { signal });
+		const r = await tx(pi, ["new-window", "-d", "-P", "-F", "#{pane_id}", "-c", cwd, cmdStr], { signal });
 		if (r.code !== 0) return { ok: false, message: (r.stderr || r.stdout).trim() || `tmux exited ${r.code}` };
 		return { ok: true, pane: r.stdout.trim().split("\n").pop() ?? "" };
 	} catch (e: any) {
@@ -101,7 +145,7 @@ async function launchPane(
 /** Best-effort pane kill: never throws, ignores abort. */
 async function killPane(pi: ExtensionAPI, pane: string): Promise<void> {
 	try {
-		await pi.exec("tmux", ["kill-pane", "-t", pane], {}); // no signal: cleanup must run even when aborted
+		await tx(pi, ["kill-pane", "-t", pane]); // no signal: cleanup must run even when aborted
 	} catch {}
 }
 
@@ -109,7 +153,7 @@ async function killPane(pi: ExtensionAPI, pane: string): Promise<void> {
 
 /** pane_id -> @pi_sid of every live pane. THROWS when tmux is unreachable — never silently "nothing is alive". */
 async function paneLabels(pi: ExtensionAPI): Promise<Map<string, string>> {
-	const r = await pi.exec("tmux", ["list-panes", "-a", "-F", "#{pane_id}|#{@pi_sid}|#{pane_dead}"], {});
+	const r = await tx(pi, ["list-panes", "-a", "-F", "#{pane_id}|#{@pi_sid}|#{pane_dead}"]);
 	if (r.code !== 0) {
 		const detail = (r.stderr || r.stdout).trim() || `exited ${r.code}`;
 		throw new Error(`tmux list-panes failed: ${detail}`);
@@ -514,7 +558,7 @@ export default function piPeer(pi: ExtensionAPI) {
 		// Best effort — without the label this session reads as dead.
 		if (ctx.mode === "tui" && process.env.TMUX_PANE) {
 			try {
-				await pi.exec("tmux", ["set-option", "-p", "-t", process.env.TMUX_PANE, "@pi_sid", sid], {});
+				await tx(pi, ["set-option", "-p", "-t", process.env.TMUX_PANE, "@pi_sid", sid]);
 			} catch {}
 		}
 		stopLoop?.();
