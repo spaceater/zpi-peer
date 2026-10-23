@@ -8,6 +8,8 @@ import { getAgentDir, SessionManager, type ExtensionAPI } from "@earendil-works/
 
 // pi-peer — equal, durable peers in tmux windows + a letter channel between any pi
 // sessions. A session is alive exactly while a live pane carries its @pi_sid label.
+// The same pane also carries the window label the human reads: the session name prefixed
+// by the OSC 7501 state (idle = none, working = spinner, blocked = blinking pause).
 
 const NOT_IN_TMUX_SERVER_DOWN =
 	"tmux is not running and this pi instance is not inside it ($TMUX is unset). Peers live in windows of the caller's own tmux session, so start tmux and run pi inside it first — without that, peer_spawn / peer_list / peer_send_mail cannot work properly.";
@@ -314,7 +316,7 @@ function readNameFromFile(sid: string): { name: string | null; file: string | nu
 	return { name, file };
 }
 
-/** Uniform failed-tool result: "<code>: <detail>" text plus structured { code, message, …extra }. */
+/** Uniform failed-tool result: "<code>: <detail>" text plus structured { code, message, ...extra }. */
 function errResult(code: string, detail: string, extra?: Record<string, unknown>) {
 	const message = `${code}: ${detail}`;
 	return {
@@ -505,17 +507,89 @@ export default function piPeer(pi: ExtensionAPI) {
 
 	let stopLoop: (() => void) | null = null;
 
+	// Window label — the TUI pi that owns a pane also names its window
+	// `<state glyph><session name>` (sessionId while unnamed), where the glyph is the
+	// OSC 7501 state: none when idle, an animated braille spinner while a run or
+	// compaction is in flight, a blinking pause while a dialog waits. Writes target the
+	// PANE id, which tmux resolves to whichever window currently holds it, so a pane moved
+	// elsewhere keeps its label. rename-window clears automatic-rename for that window, so
+	// the label sticks instead of falling back to the command name ("pi").
+	const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+	const BLINK = ["⏸", " "]; // the space holds the glyph's place, so the name never shifts
+	const ANIM_MS = 200;
+	const MAX_NAME_CHARS = 18;
+	let labeling = false;
+	let lastWrittenLabel: string | null = null;
+	let runActive = false;
+	let blockedActive = false;
+	let animFrame = 0;
+	let animTimer: ReturnType<typeof setInterval> | null = null;
+
+	const truncateName = (name: string): string => {
+		const chars = [...name]; // code points, so a surrogate pair counts as one character
+		return chars.length > MAX_NAME_CHARS ? `${chars.slice(0, MAX_NAME_CHARS).join("")}...` : name;
+	};
+
+	const writeWindowLabel = async (prefix: string): Promise<void> => {
+		if (!labeling) return;
+		const pane = process.env.TMUX_PANE;
+		if (!pane) return;
+		const name = pi.getSessionName()?.trim() || roleSid || "";
+		if (!name) return;
+		const label = `${prefix}${truncateName(name)}`;
+		if (label === lastWrittenLabel) return;
+		lastWrittenLabel = label;
+		try {
+			const r = await pi.exec("tmux", ["rename-window", "-t", pane, label], {});
+			if (r.code !== 0) labeling = false; // server unreachable: stay silent from here on
+		} catch {
+			labeling = false;
+		}
+	};
+
+	const busy = () => labeling && (runActive || compactionActive || blockedActive);
+	const animPrefix = () =>
+		blockedActive ? BLINK[Math.floor(animFrame / 3) % BLINK.length] : SPINNER[animFrame % SPINNER.length];
+	const refreshLabel = async (): Promise<void> => {
+		const active = busy();
+		if (active && !animTimer) {
+			animFrame = 0;
+			animTimer = setInterval(() => {
+				animFrame++;
+				void writeWindowLabel(animPrefix());
+			}, ANIM_MS);
+			animTimer.unref?.();
+		} else if (!active && animTimer) {
+			clearInterval(animTimer);
+			animTimer = null;
+		}
+		await writeWindowLabel(active ? animPrefix() : "");
+	};
+	const stopAnim = () => {
+		if (animTimer) {
+			clearInterval(animTimer);
+			animTimer = null;
+		}
+	};
+
 	pi.on("session_start", async (event, ctx) => {
 		const sid = ctx.sessionManager.getSessionId();
 		inheritRoleFromFork(event, sid);
 		loadOwnRole(sid);
 		compactionActive = false;
+		runActive = false;
+		blockedActive = false;
+		labeling = false;
+		lastWrittenLabel = null;
+		stopAnim();
 		// Only a TUI owns a pane: a nested print/json pi inherits $TMUX_PANE and would steal it.
 		// Best effort — without the label this session reads as dead.
 		if (ctx.mode === "tui" && process.env.TMUX_PANE) {
 			try {
 				await pi.exec("tmux", ["set-option", "-p", "-t", process.env.TMUX_PANE, "@pi_sid", sid], {});
 			} catch {}
+			labeling = true;
+			await writeWindowLabel("");
 		}
 		stopLoop?.();
 		stopLoop = startInboxLoop(pi, sid, () => ctx.isIdle());
@@ -526,12 +600,33 @@ export default function piPeer(pi: ExtensionAPI) {
 	// in session_before_compact — so the flag always has a reset path.
 	pi.on("session_before_compact", async () => {
 		compactionActive = true;
+		await refreshLabel();
 	});
 	const compactionOver = async () => {
 		compactionActive = false;
+		await refreshLabel();
 	};
 	pi.on("session_compact", compactionOver);
 	pi.on("session_compact_failed", compactionOver);
+
+	// The label states a dialog occupies and the rename hook. agent_settled is the final
+	// boundary after retries/compaction/queued work; the run's outcome is deliberately not
+	// shown — the label says whether the session is doing something, not how it ended.
+	pi.on("ui_prompt_start", async () => {
+		blockedActive = true;
+		await refreshLabel();
+	});
+	pi.on("ui_prompt_end", async () => {
+		blockedActive = false;
+		await refreshLabel();
+	});
+	pi.on("agent_settled", async () => {
+		runActive = false;
+		await refreshLabel();
+	});
+	pi.on("session_info_changed", async () => {
+		await refreshLabel();
+	});
 
 	// pi persists no system prompt (--append-system-prompt vanishes on resume), so the role is
 	// re-applied EVERY turn from the file the registry points at. Identity follows the SESSION,
@@ -546,6 +641,8 @@ export default function piPeer(pi: ExtensionAPI) {
 		// Re-resolve on session switch so the role never leaks across sessions.
 		const sid = ctx.sessionManager.getSessionId();
 		if (sid !== roleSid) loadOwnRole(sid);
+		runActive = true;
+		await refreshLabel();
 		if (!appendPromptPath) return;
 		let text: string;
 		try {
@@ -725,6 +822,7 @@ export default function piPeer(pi: ExtensionAPI) {
 	pi.on("session_shutdown", async () => {
 		stopLoop?.();
 		stopLoop = null;
+		stopAnim();
 	});
 
 	pi.registerTool({
