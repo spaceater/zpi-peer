@@ -383,7 +383,7 @@ function pendingLetters(dir: string): string[] {
 // failed — it must simply not send during the window.
 let compactionActive = false;
 
-/** Announce waiting letters merged — steer while running or starting (pi 1.2.0 counts the
+/** Announce waiting letters merged — steer while running or starting (pi counts the
  * session busy from run start, so a letter landing there queues into the starting run
  * instead of racing it), followUp when idle. While compaction runs the tick does nothing:
  * pi rejects prompt submission then, the rejection is not observable through
@@ -632,11 +632,11 @@ export default function piPeer(pi: ExtensionAPI) {
 	// re-applied EVERY turn from the file the registry points at. Identity follows the SESSION,
 	// not the process: /new inside a peer's pane runs plain; a fork inherits the branched
 	// session's role. Idempotent: skips when already present.
-	// pi 1.2.0: the event is a union on event.messageType — "user" runs (prompts,
+	// The event is a union on event.messageType — "user" runs (prompts,
 	// sendUserMessage) carry prompt/images, "custom" runs (sendMessage with triggerTurn)
 	// carry the starting message. The role deliberately applies to BOTH kinds: any turn the
 	// peer runs carries its stance. The forced system prompt now also survives the run's
-	// tool calls (1.2.0 fix), so the prompt cache no longer breaks mid-run over the role.
+	// tool calls, so the prompt cache no longer breaks mid-run over the role.
 	pi.on("before_agent_start", async (event, ctx) => {
 		// Re-resolve on session switch so the role never leaks across sessions.
 		const sid = ctx.sessionManager.getSessionId();
